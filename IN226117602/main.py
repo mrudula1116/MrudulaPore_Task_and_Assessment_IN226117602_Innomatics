@@ -27,6 +27,9 @@ class BulkOrder(BaseModel):
     company_name:  str           = Field(..., min_length=2)
     contact_email: str           = Field(..., min_length=5)
     items:         List[OrderItem] = Field(..., min_items=1)
+class CheckoutRequest(BaseModel):
+    customer_name:    str = Field(..., min_length=2)
+    delivery_address: str = Field(..., min_length=10)
 
 # ── Temporary data — acting as our database for now ──────────
 products = [
@@ -41,7 +44,7 @@ products = [
      {"id":9,"name":"smart watch","price":3999,"category":"Electronics","in_stock":False} ]
 orders = []
 order_counter = 1
-
+cart=[]
 
 # Fixed routes (/filter /compare /audit /discount) BEFORE variable (/{product_id})
 # ── Endpoint 0 — Home ────────────────────────────────────────
@@ -240,12 +243,8 @@ def bulk_discount(
         'message': f'{discount_percent}% discount applied to {category}',
         'updated_count': len(updated),
         'updated_products': updated}
-# ── Endpoint 2 — Return one product by its ID ──────────────────
-@app.get('/products/{product_id}')
-def get_product(product_id: int):
-    for product in products:
-        if product['id'] == product_id:
-            return {'product': product}
+        
+
 #post product endpoint
 @app.post('/products')
 def add_product(new_product: NewProduct, response: Response):
@@ -298,5 +297,89 @@ def delete_product(product_id: int, response: Response):
  
     products.remove(product)
     return {'message': f"Product '{product['name']}' deleted"}
+    #day 5
+@app.post('/cart/add')
+def add_to_cart(
+    product_id: int = Query(..., description='Product ID to add'),
+    quantity:   int = Query(1,   description='How many (default 1)'),
+):
+    product = find_product(product_id)
+    if not product:
+        return {'error': 'Product not found'}
+    if not product['in_stock']:
+        return {'error': f"{product['name']} is out of stock"}
+    if quantity < 1:
+        return {'error': 'Quantity must be at least 1'}
+    # Already in cart — update quantity
+    for item in cart:
+        if item['product_id'] == product_id:
+            item['quantity'] += quantity
+            item['subtotal']  = calculate_total(product, item['quantity'])
+            return {'message': 'Cart updated', 'cart_item': item}
+    # New item
+    cart_item = {
+        'product_id':   product_id,
+        'product_name': product['name'],
+        'quantity':     quantity,
+        'unit_price':   product['price'],
+        'subtotal':     calculate_total(product, quantity),
+    }
+    cart.append(cart_item)
+    return {'message': 'Added to cart', 'cart_item': cart_item}
+
+@app.get('/cart')
+def view_cart():
+    if not cart:
+        return {'message': 'Cart is empty', 'items': [], 'grand_total': 0}
+    grand_total = sum(item['subtotal'] for item in cart)
+    return {
+        'items':       cart,
+        'item_count':  len(cart),
+        'grand_total': grand_total,
+    }
+@app.post('/cart/checkout')
+def checkout(checkout_data: CheckoutRequest, response: Response):
+    global order_counter
+    if not cart:
+        response.status_code = status.HTTP_400_BAD_REQUEST
+        return {'error': 'Cart is empty — add items first'}
+    placed_orders = []
+    grand_total   = 0
+    for item in cart:
+        order = {
+            'order_id':         order_counter,
+            'customer_name':    checkout_data.customer_name,
+            'product':          item['product_name'],
+            'quantity':         item['quantity'],
+            'delivery_address': checkout_data.delivery_address,
+            'total_price':      item['subtotal'],
+            'status':           'confirmed',
+        }
+        orders.append(order)
+        placed_orders.append(order)
+        grand_total   += item['subtotal']
+        order_counter += 1
+    cart.clear()
+    response.status_code = status.HTTP_201_CREATED
+    return {
+        'message':       'Checkout successful',
+        'orders_placed': placed_orders,
+        'grand_total':   grand_total,
+    }
+@app.delete('/cart/{product_id}')
+def remove_from_cart(product_id: int, response: Response):
+    for item in cart:
+        if item['product_id'] == product_id:
+            cart.remove(item)
+            return {'message': f"{item['product_name']} removed from cart"}
+    response.status_code = status.HTTP_404_NOT_FOUND
+    return {'error': 'Product not in cart'}
  
+ 
+ # ── Endpoint 2 — Return one product by its ID ──────────────────
+@app.get('/products/{product_id}')
+def get_product(product_id: int):
+    for product in products:
+        if product['id'] == product_id:
+            return {'product': product}
  
